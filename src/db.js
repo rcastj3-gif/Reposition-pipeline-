@@ -1,19 +1,46 @@
 const { Pool } = require('pg');
 
+// Debug: Log environment variables (remove in production)
+console.log('Environment check:');
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('NODE_ENV:', process.env.NODE_ENV);
+
 // Use DATABASE_URL from environment (provided by Railway)
+if (!process.env.DATABASE_URL) {
+  console.error('❌ DATABASE_URL environment variable is not set!');
+  console.error('Please ensure PostgreSQL database is connected in Railway dashboard.');
+  // Create a dummy pool that will fail gracefully
+  module.exports = {
+    prepare: () => { throw new Error('Database not configured'); },
+    exec: () => { throw new Error('Database not configured'); },
+    query: () => { throw new Error('Database not configured'); },
+    pool: null
+  };
+  return;
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
+  ssl: process.env.NODE_ENV === 'production' ? {
     rejectUnauthorized: false // Required for Railway PostgreSQL
-  }
+  } : false
+});
+
+// Test connection
+pool.on('error', (err) => {
+  console.error('Unexpected database error:', err);
 });
 
 // Initialize tables
 async function initDatabase() {
-  const client = await pool.connect();
   try {
+    // Test connection first
+    const testClient = await pool.connect();
+    console.log('✅ Database connected successfully');
+    testClient.release();
+
     // Create tables
-    await client.query(`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS contacts (
         id TEXT PRIMARY KEY,
         first_name TEXT,
@@ -83,17 +110,16 @@ async function initDatabase() {
       );
     `);
 
-    console.log('✅ Database initialized (PostgreSQL)');
+    console.log('✅ Database tables initialized');
   } catch (err) {
     console.error('❌ Database initialization error:', err);
-    throw err;
-  } finally {
-    client.release();
+    // Don't throw - let the app start even if DB fails
+    // The app can retry connections later
   }
 }
 
 // Initialize on module load
-initDatabase().catch(console.error);
+initDatabase();
 
 // Export query interface compatible with better-sqlite3
 module.exports = {
